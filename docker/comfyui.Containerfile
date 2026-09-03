@@ -22,22 +22,35 @@ ARG COMFYUI_HOME=/opt/comfyui
 ARG COMFYUI_DATA=/data/comfyui
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
 
+# TRITON_CACHE_DIR is pinned because Triton otherwise writes its JIT output to
+# $HOME/.triton, and the non-root variant's uid has no passwd entry -- so $HOME
+# resolves to something unwritable. Under the data dir it is both writable and
+# persistent, which also keeps the compile off the first request after a restart.
 ENV COMFYUI_HOME=${COMFYUI_HOME} \
     COMFYUI_DATA=${COMFYUI_DATA} \
+    TRITON_CACHE_DIR=${COMFYUI_DATA}/.triton \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 
 # python3-venv keeps ComfyUI's dependency tree out of the system interpreter,
 # which matters because the base is a CUDA runtime image with its own packages.
 # libgl1/libglib2.0-0 are the shared objects PyOpenGL and the imaging stack dlopen.
+#
+# gcc + python3-dev are for Triton, which torch dispatches eager ops through
+# (torch._native) -- not just torch.compile. On first use it builds its CUDA
+# driver shim as a C extension at *runtime*, so without a compiler and Python.h
+# in the image any workflow touching a Triton-backed op dies with
+# "Failed to find C compiler".
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ca-certificates \
+        gcc \
         git \
         libgl1 \
         libglib2.0-0 \
         python3 \
+        python3-dev \
         python3-venv; \
     rm -rf /var/lib/apt/lists/*
 
