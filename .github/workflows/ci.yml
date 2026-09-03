@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: shellcheck
+        run: shellcheck -x scripts/*.sh docker/*.sh
+
+      - name: hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: docker/comfyui.Containerfile
+          # DL3008: apt packages are deliberately unpinned -- the base image's
+          # Ubuntu release moves under us as upstream rebuilds.
+          ignore: DL3008
+
+      - name: Validate the llama-swap config against upstream's schema
+        run: |
+          set -euo pipefail
+          pip install check-jsonschema pyyaml
+          curl -fsSL -o /tmp/config-schema.json \
+            https://raw.githubusercontent.com/mostlygeek/llama-swap/refs/heads/main/config-schema.json
+          check-jsonschema --schemafile /tmp/config-schema.json docker/config.comfyui.yaml
+
+  plan:
+    # Proves the planner still parses upstream's tag grammar. If mostlygeek
+    # ever changes the scheme this goes red before a scheduled run silently
+    # mirrors nothing.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Dry-run the planner
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FORCE: "1"
+        run: |
+          set -euo pipefail
+          matrix="$(./scripts/plan-builds.sh)"
+          jq -e 'length > 0' <<<"$matrix" > /dev/null \
+            || { echo "planner found no upstream tags -- tag scheme may have changed" >&2; exit 1; }
+          jq '.' <<<"$matrix"
+
+  build-test:
+    # Only when the image itself changes: a real CUDA build is ~20 minutes.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check whether the image definition changed
+        id: changed
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          if git diff --name-only "$base" HEAD | grep -qE '^(docker/|scripts/build-image\.sh|versions\.env)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Free up disk space
+        if: steps.changed.outputs.run == 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker system prune -af
+          df -h /
+
+      - name: Build the cuda variant without pushing
+        if: steps.changed.outputs.run == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PUSH: "false"
+        run: |
+          set -euo pipefail
+          tag="$(GITHUB_TOKEN=${GITHUB_TOKEN} FORCE=1 BUILD_DEPTH=1 ./scripts/plan-builds.sh \
+                  | jq -r '[.[] | select(.backend=="cuda" and .variant=="root")][0].tag')"
+          echo "building ${tag}"
+          ./scripts/build-image.sh "$tag"
+
+      - name: Smoke-test the built image
+        if: steps.changed.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          img="ghcr.io/${GITHUB_REPOSITORY}:cuda"
+          # No GPU on the runner, so only check that ComfyUI imports and that
+          # llama-swap accepts the config we ship.
+          docker run --rm -w /opt/comfyui/app --entrypoint /opt/comfyui/venv/bin/python "$img" \
+            -c "import torch, comfy.options, nodes; print('torch', torch.__version__)"
+          docker run --rm --entrypoint /app/llama-swap "$img" -config /app/config.yaml -validate

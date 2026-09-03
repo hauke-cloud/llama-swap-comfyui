@@ -1,0 +1,60 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/mostlygeek/llama-swap/refs/heads/main/config-schema.json
+#
+# Default llama-swap config for the llama-swap-comfyui images.
+#
+# The only thing this adds over a stock llama-swap config is the `comfyui`
+# model below. Everything else is here so the file is usable as-is; the
+# upstream example this replaced is kept at /app/config.upstream.yaml.
+#
+# llama-swap runs with -watch-config, so edits to a mounted copy of this file
+# are picked up without restarting the container.
+
+healthCheckTimeout: 900
+logLevel: info
+
+macros:
+  comfyui_data: "/data/comfyui"
+
+models:
+  # ComfyUI, started on demand and reachable at:
+  #
+  #     http://localhost:8080/upstream/comfyui/
+  #
+  # Hitting that path loads the model if it isn't running, exactly like an
+  # inference request would. Because it shares llama-swap's default (exclusive)
+  # group with every llama.cpp model, starting ComfyUI unloads whatever LLM was
+  # resident -- which is the point: one GPU, one workload at a time.
+  comfyui:
+    name: "ComfyUI"
+    description: "ComfyUI web UI and API, proxied at /upstream/comfyui/"
+
+    cmd: |
+      /opt/comfyui/venv/bin/python /opt/comfyui/app/main.py
+      --listen 127.0.0.1
+      --port ${PORT}
+      --base-directory ${comfyui_data}
+      --disable-auto-launch
+
+    proxy: "http://127.0.0.1:${PORT}"
+
+    # ComfyUI answers /system_stats once the model manager is up. Without this
+    # llama-swap would poll llama.cpp's /health, which ComfyUI does not serve.
+    checkEndpoint: "/system_stats"
+
+    # ComfyUI is not OpenAI-compatible, so advertising it in /v1/models only
+    # gives chat clients a model that 404s. Flip to false if you would rather
+    # see it in the llama-swap UI's model list.
+    unlisted: true
+
+    # Free the GPU 15 minutes after the last request.
+    ttl: 900
+
+# ---------------------------------------------------------------------------
+# Add your llama.cpp models below. `llama-server` is on PATH in these images.
+#
+#  qwen3-8b:
+#    cmd: |
+#      llama-server --port ${PORT}
+#      -m /models/qwen3-8b-q4_k_m.gguf
+#      --ctx-size 16384 --n-gpu-layers 99
+# ---------------------------------------------------------------------------

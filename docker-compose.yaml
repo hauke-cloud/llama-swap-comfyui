@@ -1,0 +1,20 @@
+# Minimal runnable example. `docker compose up` after adjusting the volumes.
+services:
+  llama-swap-comfyui:
+    image: ghcr.io/hauke-cloud/llama-swap-comfyui:cuda
+    ports:
+      - "8080:8080"
+    volumes:
+      # GGUF models for llama.cpp
+      - ./models:/models
+      # ComfyUI's models, custom_nodes, input, output and user directories
+      - ./comfyui:/data/comfyui
+      # Your own llama-swap config; drop this line to use the bundled one
+      # - ./config.yaml:/app/config.yaml:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
