@@ -9,8 +9,18 @@ services:
       - ./models:/models
       # ComfyUI's models, custom_nodes, input, output and user directories
       - ./comfyui:/data/comfyui
+      # Strata's model files, presets, run settings and keys
+      - ./strata:/data/strata
       # Your own llama-swap config; drop this line to use the bundled one
       # - ./config.yaml:/app/config.yaml:ro
+    # Strata pins the RAM it holds the model in and uses shared memory.
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    shm_size: 2gb
+    # Room for llama-swap to stop Strata cleanly (drain + free the GPU).
+    stop_grace_period: 2m
     deploy:
       resources:
         reservations:

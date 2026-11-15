@@ -12,7 +12,7 @@
 
 <llm header>
 
-This repository provides a GitHub Actions workflow that builds derived container images extending the upstream llama-swap service. It installs ComfyUI as a swappable model alongside llama.cpp LLMs, allowing you to share a single GPU between OpenAI-compatible text generation and image-generation workflows.
+This repository provides a GitHub Actions workflow that builds derived container images extending the upstream llama-swap service. It installs ComfyUI and [Strata](https://github.com/Niko1221/Strata) as swappable models alongside llama.cpp LLMs, allowing you to share a single GPU between OpenAI-compatible text generation and image-generation workflows.
 
 </llm>
 
@@ -27,6 +27,7 @@ The repository mirrors upstream `llama-swap` tags and builds derived images for 
 
 * Mirrors upstream `llama-swap` tags and builds derived images with ComfyUI and PyTorch.
 * Registers ComfyUI as a swappable model that shares the GPU exclusively with llama.cpp.
+* Bundles the Strata LLM server (from `ghcr.io/niko1221/strata`) as the swappable model `strata`, with its state under `/data/strata`.
 * Supports CUDA 12.8 and CUDA 13.3 backends with floating aliases for latest builds.
 * Includes a scheduled cleanup job to retain only the most recent tagged manifests.
 
@@ -56,7 +57,7 @@ GITHUB_TOKEN=<token> FORCE="1" ./scripts/plan-builds.sh | jq -e 'length > 0'
 ```
 5. You start the container with GPU access and persistent data directories.
 ```bash
-docker run --rm --gpus all -p 8080:8080 -v /srv/models:/models -v /srv/comfyui:/data/comfyui ghcr.io/hauke-cloud/llama-swap-comfyui:cuda
+docker run --rm --gpus all -p 8080:8080 --ulimit memlock=-1:-1 --shm-size 2g --stop-timeout 120 -v /srv/models:/models -v /srv/comfyui:/data/comfyui -v /srv/strata:/data/strata ghcr.io/hauke-cloud/llama-swap-comfyui:cuda
 ```
 
 </llm>
@@ -69,7 +70,7 @@ docker run --rm --gpus all -p 8080:8080 -v /srv/models:/models -v /srv/comfyui:/
 Once you have pulled a built image, run it with Docker to expose the llama-swap API on port 8080. Mount your model directory and a persistent data volume so ComfyUI retains custom nodes and caches across restarts.
 
 ```bash
-docker run --rm --gpus all -p 8080:8080 -v /srv/models:/models -v /srv/comfyui:/data/comfyui ghcr.io/hauke-cloud/llama-swap-comfyui:cuda
+docker run --rm --gpus all -p 8080:8080 --ulimit memlock=-1:-1 --shm-size 2g --stop-timeout 120 -v /srv/models:/models -v /srv/comfyui:/data/comfyui -v /srv/strata:/data/strata ghcr.io/hauke-cloud/llama-swap-comfyui:cuda
 ```
 
 You can also start the service locally using the provided `docker-compose.yaml` file, which handles GPU reservations and volume mounts automatically.
@@ -79,6 +80,12 @@ docker compose up
 ```
 
 The container exposes an OpenAI-compatible endpoint for llama.cpp models and a ComfyUI interface on the same port. When you send requests to either backend, llama-swap loads the corresponding model into VRAM and unloads the other. ComfyUI automatically frees the GPU after 15 minutes of idle time (`ttl: 900`). To add custom nodes or persist workflows, place them in the mounted `/data/comfyui` directory. The service watches `config.comfyui.yaml` for live updates, so you can adjust health checks, logging, or model routing without restarting the container.
+
+Strata downloads and prepares its model (tens of GB) on first start, which exceeds llama-swap's health-check timeout. Prepare it once, while nothing else uses the GPU; the choice is saved in the `llama-swap` preset that the `strata` model entry starts. Strata's engines need NVIDIA driver 575+ (`cuda` images) or 580+ (`cuda13`).
+
+```bash
+docker exec -it <container> strata-llama-swap prepare --model IQ3_XXS
+```
 
 </llm>
 

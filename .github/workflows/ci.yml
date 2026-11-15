@@ -99,3 +99,8 @@ jobs:
           docker run --rm -w /opt/comfyui/app --entrypoint /opt/comfyui/venv/bin/python "$img" \
             -c "import torch, comfy.options, nodes; print('torch', torch.__version__)"
           docker run --rm --entrypoint /app/llama-swap "$img" -config /app/config.yaml -validate
+          # Strata: the Terminal runs, the wrapper can set up its state dir,
+          # and the engine package made it into the image.
+          docker run --rm --entrypoint /usr/local/bin/strata "$img" --version
+          docker run --rm --entrypoint /bin/sh "$img" \
+            -c 'ls /opt/strata/components/engine/*/engine-component.json'

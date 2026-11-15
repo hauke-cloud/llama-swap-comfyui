@@ -2,8 +2,8 @@
 #
 # Default llama-swap config for the llama-swap-comfyui images.
 #
-# The only thing this adds over a stock llama-swap config is the `comfyui`
-# model below. Everything else is here so the file is usable as-is; the
+# The only things this adds over a stock llama-swap config are the `comfyui`
+# and `strata` models below. Everything else is here so the file is usable as-is; the
 # upstream example this replaced is kept at /app/config.upstream.yaml.
 #
 # llama-swap runs with -watch-config, so edits to a mounted copy of this file
@@ -48,6 +48,41 @@ models:
 
     # Free the GPU 15 minutes after the last request.
     ttl: 900
+
+  # Strata (https://github.com/Niko1221/Strata), an OpenAI- and Anthropic-
+  # compatible LLM server. Request it as model "strata" on /v1/..., or reach its
+  # own pages at /upstream/strata/ (e.g. /upstream/strata/v1/status).
+  #
+  # Flags after --preset go to `strata launch` and are saved in the preset, so
+  # pick the model here (or once with `strata-llama-swap prepare`, see below):
+  #
+  #     --model IQ3_XXS --context 64k
+  #
+  # With no --model, Strata picks the one it recommends for the card.
+  #
+  # The first start downloads and prepares the model (tens of GB), which takes
+  # far longer than healthCheckTimeout. Do it once up front instead:
+  #
+  #     docker exec -it <container> strata-llama-swap prepare --model IQ3_XXS
+  strata:
+    name: "Strata"
+    description: "Strata LLM server (OpenAI + Anthropic API)"
+
+    cmd: |
+      /usr/local/bin/strata-llama-swap
+      --port ${PORT}
+      --preset llama-swap
+
+    proxy: "http://127.0.0.1:${PORT}"
+
+    # Strata's /health answers only once the model is loaded.
+    checkEndpoint: "/health"
+
+    # Unloading drains in-flight requests and frees the GPU through
+    # `strata launch --stop`; llama-swap's default 10 s can cut that short.
+    unloadTimeout: 120
+
+    ttl: 1800
 
 # ---------------------------------------------------------------------------
 # Add your llama.cpp models below. `llama-server` is on PATH in these images.

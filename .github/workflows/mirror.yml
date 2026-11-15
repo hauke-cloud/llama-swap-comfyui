@@ -1,4 +1,4 @@
-name: Mirror upstream + ComfyUI
+name: Mirror upstream + ComfyUI + Strata
 
 # Upstream (mostlygeek/llama-swap) publishes on a cron rather than on releases,
 # so there is no event to subscribe to -- we poll its GHCR tag list and build
@@ -16,6 +16,10 @@ on:
         default: "1"
       comfyui_ref:
         description: "ComfyUI git ref to install (blank = latest release)"
+        type: string
+        default: ""
+      strata_version:
+        description: "Strata image version to bundle, e.g. 0.2.13 (blank = newest published image)"
         type: string
         default: ""
       force:
@@ -38,6 +42,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       count: ${{ steps.plan.outputs.count }}
       comfyui_ref: ${{ steps.comfyui.outputs.ref }}
+      strata_version: ${{ steps.strata.outputs.version }}
     steps:
       - uses: actions/checkout@v6
 
@@ -58,6 +63,27 @@ jobs:
           [ -n "$ref" ] && [ "$ref" != "null" ] || { echo "could not resolve ComfyUI ref" >&2; exit 1; }
           echo "ref=${ref}" >> "$GITHUB_OUTPUT"
           echo "ComfyUI ref: ${ref}" >> "$GITHUB_STEP_SUMMARY"
+
+      # Same reasoning: one Strata version for every image in the run. Read
+      # from the published image's label rather than the GitHub release,
+      # because releases can land before their images.
+      - name: Resolve Strata version
+        id: strata
+        env:
+          PINNED: ${{ inputs.strata_version }}
+        run: |
+          set -euo pipefail
+          source ./versions.env
+          if [ -n "${PINNED}" ]; then
+            version="${PINNED}"
+          else
+            version="$(docker buildx imagetools inspect "${STRATA_IMAGE}:latest-${STRATA_FLAVOR_cuda13}" \
+                         --format '{{json .Image}}' \
+                       | jq -r '.config.Labels["org.opencontainers.image.version"] // empty')"
+          fi
+          [ -n "$version" ] || { echo "could not resolve Strata version" >&2; exit 1; }
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Strata version: ${version}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Plan builds
         id: plan
@@ -90,8 +116,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # A CUDA base (~6 GB unpacked) plus a torch layer (~4 GB) does not fit in
-      # the ~14 GB a stock hosted runner leaves free.
+      # A CUDA base (~6 GB unpacked) plus a torch layer (~4 GB) and Strata
+      # (~2-3 GB) does not fit in the ~14 GB a stock hosted runner leaves free.
       - name: Free up disk space
         run: |
           echo "Before cleanup:"; df -h /
@@ -111,6 +137,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           COMFYUI_REF: ${{ needs.plan.outputs.comfyui_ref }}
+          STRATA_VERSION: ${{ needs.plan.outputs.strata_version }}
           PUSH: "true"
           PUSH_FLOATING: ${{ matrix.image.push_floating }}
         run: ./scripts/build-image.sh "${{ matrix.image.tag }}"

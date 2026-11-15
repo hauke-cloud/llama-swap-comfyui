@@ -43,6 +43,35 @@ fi
 torch_var="TORCH_INDEX_${BACKEND}"
 TORCH_INDEX_URL="${!torch_var:?no torch index configured for backend ${BACKEND}}"
 
+flavor_var="STRATA_FLAVOR_${BACKEND}"
+STRATA_FLAVOR="${!flavor_var:?no Strata flavor configured for backend ${BACKEND}}"
+
+# strata_label <image-ref> <label>: one label of a published image, read from
+# its config blob without pulling the layers.
+strata_label() {
+    docker buildx imagetools inspect "$1" --format '{{json .Image}}' \
+        | jq -r --arg l "$2" '
+            (if has("config") then . else (.["linux/amd64"] // first(.[])) end)
+            | .config.Labels[$l] // empty'
+}
+
+# Pin Strata to a concrete version so the label we stamp matches what is
+# inside, even if latest-<flavor> moves mid-run.
+if [[ -z "${STRATA_VERSION:-}" ]]; then
+    echo "==> resolving latest Strata image (${STRATA_FLAVOR})"
+    STRATA_VERSION="$(strata_label "${STRATA_IMAGE}:latest-${STRATA_FLAVOR}" org.opencontainers.image.version)"
+    if [[ -z "$STRATA_VERSION" ]]; then
+        echo "error: could not resolve the latest Strata image version" >&2
+        exit 1
+    fi
+fi
+STRATA_TAG="${STRATA_VERSION}-${STRATA_FLAVOR}"
+STRATA_ENGINE="$(strata_label "${STRATA_IMAGE}:${STRATA_TAG}" com.strata.engine)"
+if [[ -z "$STRATA_ENGINE" ]]; then
+    echo "error: ${STRATA_IMAGE}:${STRATA_TAG} not found or has no engine label" >&2
+    exit 1
+fi
+
 # Resolve the ComfyUI release to install unless one was pinned.
 if [[ -z "${COMFYUI_REF:-}" ]]; then
     echo "==> resolving latest ComfyUI release"
@@ -71,6 +100,7 @@ echo "==> building ${TARGET}"
 echo "    base:    ${BASE_REF}"
 echo "    comfyui: ${COMFYUI_REF}"
 echo "    torch:   ${TORCH_INDEX_URL}"
+echo "    strata:  ${STRATA_IMAGE}:${STRATA_TAG} (engine ${STRATA_ENGINE})"
 echo "    user:    ${TARGET_UID}:${TARGET_GID}"
 
 # --provenance=false matches upstream: the attestation manifest confuses the
@@ -88,6 +118,11 @@ build_args=(
     --build-arg "COMFYUI_HOME=${COMFYUI_HOME}"
     --build-arg "COMFYUI_DATA=${COMFYUI_DATA}"
     --build-arg "TORCH_INDEX_URL=${TORCH_INDEX_URL}"
+    --build-arg "STRATA_IMAGE=${STRATA_IMAGE}"
+    --build-arg "STRATA_TAG=${STRATA_TAG}"
+    --build-arg "STRATA_VERSION=${STRATA_VERSION}"
+    --build-arg "STRATA_ENGINE=${STRATA_ENGINE}"
+    --build-arg "STRATA_ROOT=${STRATA_ROOT}"
     -t "${TARGET}"
 )
 if [[ "$PUSH_FLOATING" == "true" ]]; then
